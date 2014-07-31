@@ -65,7 +65,7 @@ except NotImplementedError:
     import random
 
 
-ENV_PREFIX = "PYXTERM_"         # Environment variable prefix
+ENV_PREFIX = "PYXTERM_"       # Environment variable prefix
 NO_COPY_ENV = set([])         # Do not copy these environment variables
 
 EXEC_DIR = ""                 # If specified, this subdirectory will be prepended to the PATH
@@ -75,7 +75,7 @@ Exec_path = os.path.join(File_dir, EXEC_DIR) if EXEC_DIR else ""
 DEFAULT_TERM_TYPE = "xterm"
 
 IDLE_TIMEOUT = 300            # Idle timeout in seconds
-UPDATE_INTERVAL = 0.05        # Fullscreen update time interval
+UPDATE_INTERVAL = 0.05        # Terminal output update time interval
 CHUNK_BYTES = 4096            # Chunk size for receiving data in stdin
 
 TERM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")   # Allowed terminal names
@@ -108,18 +108,6 @@ def command_output(command_args, **kwargs):
         return exec_queue.get(block=True, timeout=timeout)
     except queue.Empty:
         return "", "Timed out after %s seconds" % timeout
-
-def open_browser(url, browser=""):
-    if sys.platform.startswith("linux"):
-        command_args = ["xdg-open"]
-    else:
-        command_args = ["open"]
-        if browser:
-            command_args += ["-a", browser]
-
-    command_args.append(url)
-
-    return command_output(command_args, timeout=5)
 
 def set_tty_speed(fd, baudrate=termios.B230400):
     tem_settings = termios.tcgetattr(fd)
@@ -215,6 +203,7 @@ def setup_logging(log_level=logging.ERROR, filename="", file_level=None):
 
 
 class Terminal(object):
+    """Single pseudo-tty"""
     def __init__(self, term_name, fd, pid, manager, height=25, width=80, winheight=0, winwidth=0,
                  cookie=0, access_code="", log=False):
         self.term_name = term_name
@@ -267,6 +256,7 @@ class Terminal(object):
         return (self.update_needed or self.output_time > self.update_time) and cur_time-self.update_time > UPDATE_INTERVAL
 
     def update(self):
+        """ Updates terminal output display """
         self.update_time = time.time()
         self.update_needed = False
         self.update_callback()
@@ -285,17 +275,19 @@ class Terminal(object):
         self.update_callback(response_id=response_id)
 
     def write(self, data):
-        """ Transmit byte-encoded data back to user """
+        """ Displays byte-encoded output data on terminal screen (every update interval) """
         self.output_time = time.time()
         self.update_needed = True
         self.update_buf = data
 
     def read(self):
+        """ Returns any reply text in response to terminal query sequences """
         b = self.reply_buf
         self.reply_buf = ""
         return b
 
     def pty_write(self, data):
+        """ Writes to stdin of process running within terminal """
         assert isinstance(data, unicode), "Must write unicode data"
         raw_data = data.encode(self.term_encoding)
         nbytes = len(raw_data)
@@ -321,6 +313,7 @@ class Terminal(object):
                         raise excp
 
     def pty_read(self, data):
+        """ Reads from stdout/stderr of process running within terminal """
         assert isinstance(data, bytes), "Must read byte-encoded data"
 
         # Decode data (raw binary data transmitted via terminal must use base64 encoding)
@@ -362,7 +355,7 @@ class TermManager(object):
 
     def terminal(self, term_name=None, height=25, width=80, winheight=0, winwidth=0, parent="",
                  access_code="", shell_command=[], ssh_host=""):
-        """Return (tty_name, cookie, alert_msg) for existing or newly created pty"""
+        """Return (tty_name, cookie, alert_msg) for existing or newly created terminal"""
         shell_command = shell_command or self.shell_command
         ssh_host = ssh_host or self.ssh_host
         with self.lock:
@@ -398,54 +391,8 @@ class TermManager(object):
 
             pid, fd = pty.fork()
             if pid == 0:
+                # Slave pty
                 ##logging.info("Forked pid=0 %s: %s", term_name, shell_command)
-
-                if len(shell_command) == 1 and not os.path.isabs(shell_command[0]):
-                    # Relative path shell command with no arguments
-                    if shell_command[0] in ("bash", "csh", "ksh", "sh", "tcsh", "zsh"):
-                        # Standard shell
-                        cmd = shell_command[:]
-                    elif shell_command[0] == "login":
-                        # Login access
-                        time.sleep(0.3)      # Needed for PTY output to appear
-                        if os.getuid() != 0:
-                            logging.error("Must be root to run login")
-                            os._exit(1)
-                        if os.path.exists("/bin/login"):
-                            cmd = ['/bin/login']
-                        elif os.path.exists("/usr/bin/login"):
-                            cmd = ['/usr/bin/login']
-                        else:
-                            logging.error("/bin/login or /usr/bin/login not found")
-                            os._exit(1)
-                    elif shell_command[0] == "ssh":
-                        # SSH access
-                        time.sleep(0.3)      # Needed for PTY output to appear
-                        sys.stderr.write("SSH Authentication\n")
-                        hostname = ssh_host or "localhost"
-                        if hostname != "localhost":
-                            sys.stdout.write("Hostname: %s\n" % hostname)
-                        sys.stdout.write("Username: ")
-                        username = sys.stdin.readline().strip()
-                        if re.match('^[0-9A-Za-z-_. ]+$', username):
-                            cmd = ['ssh']
-                            cmd += ['-oPreferredAuthentications=keyboard-interactive,password']
-                            cmd += ['-oNoHostAuthenticationForLocalhost=yes']
-                            cmd += ['-oLogLevel=FATAL']
-                            cmd += ['-F/dev/null', '-l', username, ssh_host]
-                        else:
-                            logging.error("Invalid username %s", username)
-                            os._exit(1)
-                    else:
-                        # Non-standard program; run via shell
-                        cmd = ['/bin/sh', '-c', shell_command[0]]
-                elif shell_command and os.path.isabs(shell_command[0]):
-                    # Absolute path shell command
-                    cmd = shell_command[:]
-                else:
-                    logging.error("Invalid shell command: %s", shell_command)
-                    os._exit(1)
-
                 env = {}
                 for var in os.environ.keys():
                     if var not in NO_COPY_ENV:
@@ -457,32 +404,9 @@ class TermManager(object):
                 env["COLUMNS"] = str(width)
                 env["LINES"] = str(height)
                 env.update( dict(self.term_env(term_name, cookie, height, width, winheight, winwidth)) )
-
-                if term_dir:
-                    try:
-                        os.chdir(term_dir)
-                    except Exception:
-                        term_dir = ""
-                if not term_dir:
-                    # cd to HOME
-                    os.chdir(os.path.expanduser("~"))
-
-                ##logging.info("Exec %s: %s", cmd, env)
-
-                # Close all open fd (except stdin, stdout, stderr)
-                try:
-                    fdl = [int(i) for i in os.listdir('/proc/self/fd')]
-                except OSError:
-                    fdl = range(256)
-                for i in [i for i in fdl if i>2]:
-                    try:
-                        os.close(i)
-                    except OSError:
-                        pass
-
-                # Exec shell
-                os.execvpe(cmd[0], cmd, env)
+                self.start_shell(shell_command, env, term_dir=term_dir)
             else:
+                # Master pty
                 logging.info("Forked pid=%d %s", pid, term_name)
                 fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd,fcntl.F_GETFL)|os.O_NONBLOCK)
                 self.terminals[term_name] = Terminal(term_name, fd, pid, self,
@@ -492,7 +416,82 @@ class TermManager(object):
                                                      log=bool(self.log_file))
                 return term_name, cookie, ""
 
+    def start_shell(self, shell_command, env, term_dir=""):
+        """ Start shell command for terminal """
+        if len(shell_command) == 1 and not os.path.isabs(shell_command[0]):
+            # Relative path shell command with no arguments
+            if shell_command[0] in ("bash", "csh", "ksh", "sh", "tcsh", "zsh"):
+                # Standard shell
+                cmd_args = shell_command[:]
+            elif shell_command[0] == "login":
+                # Login access
+                time.sleep(0.3)      # Needed for PTY output to appear
+                if os.getuid() != 0:
+                    logging.error("Must be root to run login")
+                    os._exit(1)
+                if os.path.exists("/bin/login"):
+                    cmd_args = ['/bin/login']
+                elif os.path.exists("/usr/bin/login"):
+                    cmd_args = ['/usr/bin/login']
+                else:
+                    logging.error("/bin/login or /usr/bin/login not found")
+                    os._exit(1)
+            elif shell_command[0] == "ssh":
+                # SSH access
+                time.sleep(0.3)      # Needed for PTY output to appear
+                sys.stderr.write("SSH Authentication\n")
+                hostname = ssh_host or "localhost"
+                if hostname != "localhost":
+                    sys.stdout.write("Hostname: %s\n" % hostname)
+                sys.stdout.write("Username: ")
+                username = sys.stdin.readline().strip()
+                if re.match('^[0-9A-Za-z-_. ]+$', username):
+                    cmd_args = ['ssh']
+                    cmd_args += ['-oPreferredAuthentications=keyboard-interactive,password']
+                    cmd_args += ['-oNoHostAuthenticationForLocalhost=yes']
+                    cmd_args += ['-oLogLevel=FATAL']
+                    cmd_args += ['-F/dev/null', '-l', username, ssh_host]
+                else:
+                    logging.error("Invalid username %s", username)
+                    os._exit(1)
+            else:
+                # Non-standard program; run via shell
+                cmd_args = ['/bin/sh', '-c', shell_command[0]]
+        elif shell_command and os.path.isabs(shell_command[0]):
+            # Absolute path shell command
+            cmd_args = shell_command[:]
+        else:
+            logging.error("Invalid shell command: %s", shell_command)
+            os._exit(1)
+
+        if term_dir:
+            try:
+                os.chdir(term_dir)
+            except Exception:
+                term_dir = ""
+
+        if not term_dir:
+            # cd to HOME
+            os.chdir(os.path.expanduser("~"))
+
+        ##logging.info("start_shell %s: %s", cmd_args, env)
+
+        # Close all open fd (except stdin, stdout, stderr)
+        try:
+            fdl = [int(i) for i in os.listdir('/proc/self/fd')]
+        except OSError:
+            fdl = range(256)
+        for i in [i for i in fdl if i>2]:
+            try:
+                os.close(i)
+            except OSError:
+                pass
+
+        # Exec shell
+        os.execvpe(cmd_args[0], cmd_args, env)
+
     def term_env(self, term_name, cookie, height, width, winheight, winwidth, export=False):
+        """ Returns environment variables for terminal """
         env = []
         env.append( ("TERM", self.term_settings.get("type",DEFAULT_TERM_TYPE)) )
         env.append( (ENV_PREFIX+"COOKIE", str(cookie)) )
@@ -656,10 +655,8 @@ class TermManager(object):
         self.kill_all()
 
 
-
 if __name__ == "__main__":
-    ## Code to test Terminal on regular terminal
-    ## Re-size terminal to 80x25 before testing
+    ## Code to test shell wrapper
 
     from optparse import OptionParser
     usage = "usage: %prog [<shell_command>]"

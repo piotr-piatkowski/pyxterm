@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""pyxterm.py: Python websocket terminal server for term.js, using pxterm.py as the backend
+"""pyxterm.py: Python websocket terminal server for term.js, using pyxshell.py as the backend
 
 Requires term.js, pyxterm.js pyxshell.py
 
@@ -123,6 +123,18 @@ def get_query_auth(state_id):
 
 def get_first_arg(query_data, argname, default=""):
     return query_data.get(argname, [default])[0]
+
+def open_browser(url, browser=""):
+    if sys.platform.startswith("linux"):
+        command_args = ["xdg-open"]
+    else:
+        command_args = ["open"]
+        if browser:
+            command_args += ["-a", browser]
+
+    command_args.append(url)
+
+    return pyxshell.command_output(command_args, timeout=5)
 
 class ErrorMessage(Exception):
     def __init__(self, value):
@@ -733,7 +745,7 @@ def run_server(options, args):
 
     if options.terminal:
         try:
-            pyxshell.open_browser(new_url)
+            open_browser(new_url)
         except Exception as excp:
             print("Error in creating terminal; please open URL %s in browser (%s)" % (new_url, excp), file=sys.stderr)
 
