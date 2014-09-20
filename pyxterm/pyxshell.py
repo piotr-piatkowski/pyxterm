@@ -272,7 +272,7 @@ class Terminal(object):
         """ Displays byte-encoded output data on terminal screen (every update interval) """
         self.output_time = time.time()
         self.update_needed = True
-        self.update_buf = data
+        self.update_buf += data
 
     def read(self):
         """ Returns any reply text in response to terminal query sequences """
