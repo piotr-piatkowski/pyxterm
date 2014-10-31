@@ -25,16 +25,16 @@ BSD License
 #
 #  Copyright (c) 2014, Ramalingam Saravanan <sarava@sarava.net>
 #  All rights reserved.
-#  
+#
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions are met:
-#  
+#
 #  1. Redistributions of source code must retain the above copyright notice, this
-#     list of conditions and the following disclaimer. 
+#     list of conditions and the following disclaimer.
 #  2. Redistributions in binary form must reproduce the above copyright notice,
 #     this list of conditions and the following disclaimer in the documentation
-#     and/or other materials provided with the distribution. 
-#  
+#     and/or other materials provided with the distribution.
+#
 #  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 #  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 #  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -72,7 +72,7 @@ try:
 except ImportError:
     import json
 
-import pyxshell
+from pyxterm import pyxshell
 
 import tornado.auth
 import tornado.httpserver
@@ -190,7 +190,7 @@ class TermSocket(tornado.websocket.WebSocketHandler):
 
     @classmethod
     def check_connect_cookie(cls, cookie):
-        return cls._term_connect_cookies.pop(cookie, None)            
+        return cls._term_connect_cookies.pop(cookie, None)
 
     @classmethod
     def update_connect_cookie(cls, cookie, connect_data):
@@ -244,7 +244,9 @@ class TermSocket(tornado.websocket.WebSocketHandler):
         if self.term_reqpath.endswith("/"):
             self.term_reqpath = self.term_reqpath[:-1]
 
+        logging.info("Super...")
         super(TermSocket, self).__init__(*args, **kwargs)
+        logging.info("...done")
 
         self.term_authstate = None
         self.term_path = ""
@@ -268,6 +270,7 @@ class TermSocket(tornado.websocket.WebSocketHandler):
             logging.warning("pyxterm: client_cert=%s, name=%s", self.client_cert, self.common_name)
 
     def origin_check(self):
+        logging.info("Origin checking")
         if "Origin" in self.term_request.headers:
             origin = self.term_request.headers.get("Origin")
         else:
@@ -294,8 +297,6 @@ class TermSocket(tornado.websocket.WebSocketHandler):
         return self.add_state()
 
     def open(self):
-        if not self.origin_check():
-            raise tornado.web.HTTPError(404, "Websocket origin mismatch")
 
         logging.info("TermSocket.open:")
         query_data = {}
@@ -305,64 +306,12 @@ class TermSocket(tornado.websocket.WebSocketHandler):
             except Exception:
                 pass
 
-        connect_auth = get_first_arg(query_data, "cauth")
-        connect_data = self.check_connect_cookie(connect_auth)
-        if connect_data is None:
-            # Invalid connect cookie
-            connect_auth = None
+        self.term_authstate = {'state_id': 12345}
 
-        authstate = self.term_authenticate()
-        if not authstate:
-            if Term_settings["auth_type"] == "google":
-                gauth_url = "/_gauth/%s?cauth=%s" % (self.term_reqpath, self.get_connect_cookie())
-                self.term_remote_call("document", BANNER_HTML+'<p><h3><a href="%s">Click here</a> to initiate Google authentication </h3>' % gauth_url)
-            else:
-                logging.error("TermSocket.open: ERROR authentication failed")
-            self.close()
-            return
-
-        self.term_authstate = authstate
-
-        query_auth = get_first_arg(query_data, "qauth")
-        if not connect_auth and (not query_auth or query_auth != get_query_auth(self.term_authstate["state_id"])):
-            # Invalid query auth; clear any form data
-            query_data = {}
-
-        if not query_data:
-            # Confirm request, if no form data
-            if self.term_reqpath:
-                ##logging.info("TermSocket.open: Confirm request %s", self.term_reqpath)
-                confirm_url = "/%s/?cauth=%s" % (self.term_reqpath, self.get_connect_cookie())
-                self.term_remote_call("document", BANNER_HTML+'<p><h3>Click to open terminal <a href="%s">%s</a></h3>' % (confirm_url, "/"+self.term_reqpath))
-                self.close()
-                return
-            else:
-                # Forget path
-                path_comps = []
-        else:
-            path_comps = self.term_reqpath.split("/")
-
-        path_name = path_comps[0] if path_comps else "new"
-
-        if pyxshell.TERM_NAME_RE.match(path_name):
-            term_name = None if path_name == "new" else path_name
-            # Require access for ssh/login auth types (because there is no user authentication)
-            access_code = "" if Term_settings["auth_type"] in ("none", "google") else self.term_authstate["state_id"]
-            self.term_path, self.term_cookie, alert_msg = Term_manager.terminal(term_name=term_name, access_code=access_code)
-        else:
-            alert_msg = "Invalid terminal name '%s'; follow identifier rules" % path_name
-
-        if alert_msg:
-            logging.error(alert_msg)
-            self.term_remote_call("alert", alert_msg)
-            self.close()
-            return
-
-        if path_name == "new" or not query_auth:
-            redirect_url = "/%s/?qauth=%s" % (self.term_path, get_query_auth(self.term_authstate["state_id"]))
-            self.term_remote_call("redirect", redirect_url, self.term_authstate["state_id"])
-            self.close()
-            return
+        self.term_name = 'test'
+        path, cookie, alert = Term_manager.terminal(self.term_name)
+        self.term_path = path
+        self.term_cookie = cookie
 
         self.add_termsocket()
 
@@ -377,13 +326,13 @@ class TermSocket(tornado.websocket.WebSocketHandler):
 
     @classmethod
     def get_termsocket(cls, client_id):
-        return cls._all_term_sockets.get(client_id)            
+        return cls._all_term_sockets.get(client_id)
 
     def add_termsocket(self):
         self._term_counter[0] += 1
         self.term_client_id = str(self._term_counter[0])
 
-        self._all_term_sockets[self.term_client_id] = self     
+        self._all_term_sockets[self.term_client_id] = self
         self._all_term_paths[self.term_path].add(self.term_client_id)
         return self.term_client_id
 
@@ -420,7 +369,7 @@ class TermSocket(tornado.websocket.WebSocketHandler):
                 # Binary message with UTF-16 JSON prefix
                 content = kwargs.get("content")
                 assert isinstance(content, bytes), "Content must be of bytes type"
-                
+
                 json_prefix = json.dumps([method, args, {"content_type": kwargs.get("content_type",""),
                                                              "content_encoding": kwargs.get("content_encoding",""),
                                                              "content_length": len(content)} ]) + "\n\n"
@@ -460,7 +409,7 @@ class TermSocket(tornado.websocket.WebSocketHandler):
         else:
             command = json.loads(message if isinstance(message,str) else message.encode("UTF-8", "replace"))
             content = None
-            
+
         kill_term = False
         try:
             send_cmd = True
@@ -527,17 +476,17 @@ class GoogleOAuth2LoginHandler(tornado.web.RequestHandler, tornado.auth.GoogleOA
                 user = yield self.get_authenticated_user(
                     redirect_uri=auth_uri,
                     code=self.get_argument('code'))
-                
+
                 comps = user['id_token'].split('.')
                 if len(comps) != 3:
-                    raise ErrorMessage('Wrong number of comps in Google id token: %s' % (user,)) 
+                    raise ErrorMessage('Wrong number of comps in Google id token: %s' % (user,))
 
-                b64string = comps[1].encode('ascii') 
-                padded = b64string + '=' * (4 - len(b64string) % 4) 
+                b64string = comps[1].encode('ascii')
+                padded = b64string + '=' * (4 - len(b64string) % 4)
                 user_info = json.loads(base64.urlsafe_b64decode(padded))
 
                 vals = state_value.split(",")
-                if len(vals) != 2: 
+                if len(vals) != 2:
                     raise ErrorMessage('Invalid state values: %s' % state_value)
                 term_path, term_cauth = vals
 
