@@ -338,7 +338,7 @@ class TermManager(object):
         if log_file:
             setup_logging(logging.WARNING, log_file, logging.INFO)
             print("Logging to file", log_file, file=sys.stderr)
-    
+
         self.terminals = {}
         self.lock = threading.RLock()
         self.thread = threading.Thread(target=self.loop)
@@ -580,7 +580,7 @@ class TermManager(object):
                     return
                 term.pty_read(data)
             except (KeyError, IOError, OSError):
-                logging.err("pyxshell: Error in reading from %s; closing it" % term_name)
+                logging.error("pyxshell: Error in reading from %s; closing it" % term_name)
                 self.kill_term(term_name)
 
     def term_write(self, term_name, data):
@@ -648,66 +648,3 @@ class TermManager(object):
                 break
         self.kill_all()
 
-
-if __name__ == "__main__":
-    ## Code to test shell wrapper
-
-    from optparse import OptionParser
-    usage = "usage: %prog [<shell_command>]"
-    parser = OptionParser(usage=usage)
-    parser.add_option("-l", "--logging",
-                  action="store_true", dest="logging", default=False,
-                  help="Enable logging")
-
-    (options, args) = parser.parse_args()
-
-    shell_cmd = args[:] if args else ["bash"]
-
-    # Determine terminal width, height
-    height, width = struct.unpack("hh", fcntl.ioctl(pty.STDOUT_FILENO, termios.TIOCGWINSZ, "1234"))
-    if not width or not height:
-        try:
-            height, width = [int(os.getenv(var)) for var in ("LINES", "COLUMNS")]
-        except Exception:
-            height, width = 25, 80
-
-    Prompt = "> "
-    Log_file = "pyxshell.log" if options.logging else ""
-    def client_callback(term_name, response_id, command, *args):
-        if command == "stdout":
-            output = args[0]
-            sys.stdout.write(output)
-            sys.stdout.flush()
-
-    Term_manager = TermManager(client_callback, shell_cmd, log_file=Log_file, log_level=logging.INFO)
-    Term_name, term_cookie, alert_msg = Term_manager.terminal(height=height, width=width)
-
-    if alert_msg:
-        print(alert_msg, file=sys.stderr)
-    print("**Type Control-D Control-D to exit**", file=sys.stderr)
-
-    test_str = b'\xe2\x94\x80 \xe2\x94\x82 \xe2\x94\x8c \xe2\x94\x98 \xe2\x94\x90 \xe2\x94\x94 \xe2\x94\x9c \xe2\x94\xa4 \xe2\x94\xac \xe2\x94\xb4 \xe2\x94\xbc \xe2\x95\x90 \xe2\x95\x91 \xe2\x95\x94 \xe2\x95\x9d \xe2\x95\x97 \xe2\x95\x9a \xe2\x95\xa0 \xe2\x95\xa3 \xe2\x95\xa6 \xe2\x95\xa9 \xe2\x95\xac'.decode("utf-8")
-
-    Term_attr = termios.tcgetattr(pty.STDIN_FILENO)
-    try:
-        tty.setraw(pty.STDIN_FILENO)
-        expectEOF = False
-        Term_manager.term_write(Term_name, "echo '%s'\n" % test_str)
-        while True:
-            ##data = raw_input(Prompt)
-            ##Term_manager.write(data+"\n")
-            data = os.read(pty.STDIN_FILENO, 1024)
-            if byte_code(data[0]) == 4:
-                if expectEOF: raise EOFError
-                expectEOF = True
-            else:
-                expectEOF = False
-            if not data:
-                raise EOFError
-            str_data = data.decode("utf-8") if isinstance(data, bytes) else data
-            Term_manager.term_write(Term_name, str_data)
-    except EOFError:
-        Term_manager.shutdown()
-    finally:
-        # Restore terminal attributes
-        termios.tcsetattr(pty.STDIN_FILENO, termios.TCSANOW, Term_attr)
